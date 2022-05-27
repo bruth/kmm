@@ -98,7 +98,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer nc.Drain()
+	defer nc.Drain() //nolint
 
 	js, err := nc.JetStream()
 	if err != nil {
@@ -120,7 +120,7 @@ func run() error {
 	// Create an event store. (this is idempotent)
 	es := rt.EventStore("kmm")
 	if natsEmbed {
-		es.Delete()
+		_ = es.Delete()
 	}
 	err = es.Create(&rita.EventStoreConfig{Subjects: []string{"kmm.events.>"}})
 	if err != nil {
@@ -130,8 +130,6 @@ func run() error {
 	// Emulate taking a private events and re-publishing them via a public subject.
 	// Typically a new type/payload can be used with more enrichment.
 	sub, err := js.QueueSubscribe("kmm.events.accounts.*", "live-ledger", func(msg *nats.Msg) {
-		defer msg.Ack()
-
 		idx := strings.LastIndexByte(msg.Subject, '.')
 		account := msg.Subject[idx+1:]
 
@@ -149,12 +147,21 @@ func run() error {
 		}
 
 		subject := fmt.Sprintf("kmm.streams.%s.ledger", account)
-		nc.Publish(subject, msg.Data)
+		err = nc.Publish(subject, msg.Data)
+		if err != nil {
+			log.Print(err)
+			return
+		}
+
+		err = msg.Ack()
+		if err != nil {
+			log.Print(err)
+		}
 	}, nats.BindStream("kmm"))
 	if err != nil {
 		return err
 	}
-	defer sub.Unsubscribe()
+	defer sub.Unsubscribe() //nolint
 
 	handleCommand := func(ctx context.Context, msg *nats.Msg, account, operation string) (any, error) {
 		// Unmarshal the command based on the type.
@@ -222,21 +229,21 @@ func run() error {
 
 	respondMsg := func(msg *nats.Msg, result any, err error) {
 		if err != nil {
-			msg.Respond([]byte(err.Error()))
+			_ = msg.Respond([]byte(err.Error()))
 			return
 		}
 
 		if result != nil {
 			b, err := tr.Marshal(result)
 			if err != nil {
-				msg.Respond([]byte(err.Error()))
+				_ = msg.Respond([]byte(err.Error()))
 			} else {
-				msg.Respond(b)
+				_ = msg.Respond(b)
 			}
 			return
 		}
 
-		msg.Respond(nil)
+		_ = msg.Respond(nil)
 	}
 
 	// Service to handle commands.
@@ -258,7 +265,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer sub1.Unsubscribe()
+	defer sub1.Unsubscribe() //nolint
 
 	// Service to handle queries.
 	sub2, err := nc.QueueSubscribe("kmm.queries.*.*", "commands", func(msg *nats.Msg) {
@@ -294,13 +301,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer sub2.Unsubscribe()
+	defer sub2.Unsubscribe() //nolint
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		msg := fmt.Sprintf(`Kids Money Manager - hosted on Fly.io, connected with Synadia's NGS
 	Connect %s
 `, nc.ConnectedUrl())
-		w.Write([]byte(msg))
+		w.Write([]byte(msg)) //nolint
 	})
 
 	return http.ListenAndServe(httpAddr, nil)
