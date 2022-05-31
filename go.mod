@@ -3,7 +3,7 @@ module github.com/bruth/kmm
 go 1.18
 
 require (
-	github.com/bruth/rita v0.0.0-20220530170735-8e71f0da672b
+	github.com/bruth/rita v0.0.0-20220531012730-79db9b89e286
 	github.com/nats-io/jsm.go v0.0.31
 	github.com/nats-io/nats.go v1.16.0
 	github.com/shopspring/decimal v1.3.1
