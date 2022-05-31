@@ -287,7 +287,7 @@ var (
 			if err != nil {
 				return err
 			}
-			defer sub.Unsubscribe()
+			defer sub.Unsubscribe() //nolint
 
 			for {
 				msg, err := sub.NextMsg(time.Minute)
