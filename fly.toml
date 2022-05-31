@@ -9,6 +9,8 @@ processes = []
 [build]
   builder = "paketobuildpacks/builder:base"
   buildpacks = ["gcr.io/paketo-buildpacks/go"]
+[build.args]
+  BP_GO_TARGETS = "./cmd/kmm"
 
 [env]
   PORT = "8080"
@@ -17,6 +19,7 @@ processes = []
 [experimental]
   allowed_public_ports = []
   auto_rollback = true
+  cmd = ["kmm", "serve", "--http.addr=0.0.0.0:8080"]
 
 [[services]]
   http_checks = []
