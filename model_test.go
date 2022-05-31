@@ -25,7 +25,7 @@ func TestPeriodWindow(t *testing.T) {
 		StartTime     time.Time
 		NextStartTime time.Time
 	}{
-		Minute: {
+		Minutely: {
 			time.Date(2019, time.May, 3, 12, 20, 0, 0, time.UTC),
 			time.Date(2019, time.May, 3, 12, 21, 0, 0, time.UTC),
 		},
@@ -125,10 +125,10 @@ func TestAccount(t *testing.T) {
 		prettyPrint(t, a)
 
 		events, _ = a.Decide(&rita.Command{
-			Data: &SetWithdrawPolicy{MaxAmount: ten, Period: Daily},
+			Data: &SetBudget{MaxAmount: ten, Period: Daily},
 		})
-		e, _ := events[0].Data.(*WithdrawPolicySet)
-		is.Equal(*e, WithdrawPolicySet{
+		e, _ := events[0].Data.(*BudgetSet)
+		is.Equal(*e, BudgetSet{
 			MaxWithdrawAmount:   ten,
 			Period:              Daily,
 			PolicyStartTime:     e.PolicyStartTime,
@@ -175,7 +175,7 @@ func TestAccount(t *testing.T) {
 
 		// Remove policy..
 		events, err = a.Decide(&rita.Command{
-			Data: &RemoveWithdrawPolicy{},
+			Data: &RemoveBudget{},
 		})
 		is.NoErr(err)
 		a.Evolve(events[0])
@@ -225,18 +225,18 @@ func TestCurrentFunds(t *testing.T) {
 func TestPeriodSummary(t *testing.T) {
 	is := testutil.NewIs(t)
 
-	var p PeriodSummary
+	var p BudgetPeriod
 
 	ten, _ := decimal.NewFromString("10")
 	twenty, _ := decimal.NewFromString("20")
 	thirty, _ := decimal.NewFromString("30")
 
 	pt := time.Date(2019, time.May, 3, 12, 20, 30, 0, time.UTC)
-	st, nst := periodWindow(pt, Minute)
+	st, nst := periodWindow(pt, Minutely)
 
 	p.Evolve(&rita.Event{
-		Data: &WithdrawPolicySet{
-			Period:              Minute,
+		Data: &BudgetSet{
+			Period:              Minutely,
 			MaxWithdrawAmount:   thirty,
 			PolicyStartTime:     pt,
 			PeriodStartTime:     st,
@@ -252,8 +252,8 @@ func TestPeriodSummary(t *testing.T) {
 		},
 	})
 
-	is.Equal(p, PeriodSummary{
-		PolicyPeriod:            Minute,
+	is.Equal(p, BudgetPeriod{
+		PolicyPeriod:            Minutely,
 		PolicyStartTime:         pt,
 		PolicyMaxWithdrawAmount: thirty,
 		WithdrawalsInPeriod:     1,
@@ -270,8 +270,8 @@ func TestPeriodSummary(t *testing.T) {
 		},
 	})
 
-	is.Equal(p, PeriodSummary{
-		PolicyPeriod:            Minute,
+	is.Equal(p, BudgetPeriod{
+		PolicyPeriod:            Minutely,
 		PolicyStartTime:         pt,
 		PolicyMaxWithdrawAmount: thirty,
 		WithdrawalsInPeriod:     2,

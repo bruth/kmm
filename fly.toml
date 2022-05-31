@@ -1,6 +1,6 @@
-# fly.toml file generated for rita-kmm on 2022-05-20T11:19:44-04:00
+# fly.toml file generated for kmm on 2022-05-31T10:14:39-04:00
 
-app = "rita-kmm"
+app = "kmm"
 
 kill_signal = "SIGINT"
 kill_timeout = 5

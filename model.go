@@ -12,7 +12,7 @@ import (
 var (
 	ErrUnknownCommand     = errors.New("unknown command")
 	ErrNonZeroAmount      = errors.New("kmm: amount must be greater than zero")
-	ErrInvalidPeriod      = errors.New("kmm: period must be daily, weekly, or monthly")
+	ErrInvalidPeriod      = errors.New("kmm: period must be minutely, daily, weekly, monthly")
 	ErrInsufficientFunds  = errors.New("kmm: insufficient funds")
 	ErrExceedWithinPeriod = errors.New("kmm: withdrawal would exceed max amount allowed in current period")
 )
@@ -24,7 +24,7 @@ type DeciderEvolver interface {
 
 var (
 	_ DeciderEvolver = &Account{}
-	_ rita.Evolver   = &PeriodSummary{}
+	_ rita.Evolver   = &BudgetPeriod{}
 	_ rita.Evolver   = &CurrentFunds{}
 )
 
@@ -68,32 +68,32 @@ type FundsWithdrawn struct {
 type Period string
 
 const (
-	Minute  Period = "minute" // For demo...
-	Daily   Period = "daily"
-	Weekly  Period = "weekly"
-	Monthly Period = "monthly"
+	Minutely Period = "minutely" // For demo...
+	Daily    Period = "daily"
+	Weekly   Period = "weekly"
+	Monthly  Period = "monthly"
 )
 
-type SetWithdrawPolicy struct {
+type SetBudget struct {
 	MaxAmount decimal.Decimal
 	Period    Period
 }
 
-func (c *SetWithdrawPolicy) Validate() error {
+func (c *SetBudget) Validate() error {
 	if c.MaxAmount.LessThan(decimal.Zero) {
 		return ErrNonZeroAmount
 	}
 
 	// Validate period.
 	switch c.Period {
-	case Minute, Daily, Weekly, Monthly:
+	case Minutely, Daily, Weekly, Monthly:
 	default:
 		return ErrInvalidPeriod
 	}
 	return nil
 }
 
-type WithdrawPolicySet struct {
+type BudgetSet struct {
 	MaxWithdrawAmount   decimal.Decimal
 	Period              Period
 	PolicyStartTime     time.Time
@@ -101,9 +101,9 @@ type WithdrawPolicySet struct {
 	NextPeriodStartTime time.Time
 }
 
-type RemoveWithdrawPolicy struct{}
+type RemoveBudget struct{}
 
-type WithdrawPolicyRemoved struct {
+type BudgetRemoved struct {
 	PolicyRemoveTime time.Time
 }
 
@@ -112,7 +112,7 @@ type WithdrawPolicyRemoved struct {
 func periodWindow(t time.Time, p Period) (time.Time, time.Time) {
 	switch p {
 	// Every minute..
-	case Minute:
+	case Minutely:
 		st := time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), 0, 0, t.Location())
 		nst := st.Add(time.Minute)
 		return st, nst
@@ -221,13 +221,13 @@ func (a *Account) Decide(command *rita.Command) ([]*rita.Event, error) {
 			},
 		}, nil
 
-	case *SetWithdrawPolicy:
+	case *SetBudget:
 		now := a.clock.Now()
 		st, nst := periodWindow(now, c.Period)
 
 		return []*rita.Event{
 			{
-				Data: &WithdrawPolicySet{
+				Data: &BudgetSet{
 					MaxWithdrawAmount:   c.MaxAmount,
 					Period:              c.Period,
 					PolicyStartTime:     now,
@@ -237,10 +237,10 @@ func (a *Account) Decide(command *rita.Command) ([]*rita.Event, error) {
 			},
 		}, nil
 
-	case *RemoveWithdrawPolicy:
+	case *RemoveBudget:
 		return []*rita.Event{
 			{
-				Data: &WithdrawPolicyRemoved{
+				Data: &BudgetRemoved{
 					PolicyRemoveTime: a.clock.Now(),
 				},
 			},
@@ -267,14 +267,14 @@ func (a *Account) Evolve(event *rita.Event) error {
 			}
 		}
 
-	case *WithdrawPolicySet:
+	case *BudgetSet:
 		a.MaxWithdrawAmount = e.MaxWithdrawAmount
 		a.PolicyPeriod = e.Period
 		a.PeriodStartTime = e.PeriodStartTime
 		a.NextPeriodStartTime = e.NextPeriodStartTime
 		a.FundsWithdrawnInPeriod = decimal.Zero
 
-	case *WithdrawPolicyRemoved:
+	case *BudgetRemoved:
 		a.MaxWithdrawAmount = decimal.Zero
 		a.PolicyPeriod = ""
 		a.PeriodStartTime = time.Time{}
@@ -299,7 +299,7 @@ func (c *CurrentFunds) Evolve(event *rita.Event) error {
 	return nil
 }
 
-type PeriodSummary struct {
+type BudgetPeriod struct {
 	PolicyPeriod            Period
 	PolicyStartTime         time.Time
 	PolicyMaxWithdrawAmount decimal.Decimal
@@ -309,9 +309,9 @@ type PeriodSummary struct {
 	NextPeriodStartTime     time.Time
 }
 
-func (p *PeriodSummary) Evolve(event *rita.Event) error {
+func (p *BudgetPeriod) Evolve(event *rita.Event) error {
 	switch e := event.Data.(type) {
-	case *WithdrawPolicySet:
+	case *BudgetSet:
 		p.PolicyPeriod = e.Period
 		p.PolicyMaxWithdrawAmount = e.MaxWithdrawAmount
 		p.PolicyStartTime = e.PolicyStartTime
@@ -319,7 +319,7 @@ func (p *PeriodSummary) Evolve(event *rita.Event) error {
 		p.FundsWithdrawnInPeriod = decimal.Zero
 		p.PeriodStartTime, p.NextPeriodStartTime = periodWindow(e.PolicyStartTime, p.PolicyPeriod)
 
-	case *WithdrawPolicyRemoved:
+	case *BudgetRemoved:
 		p.PolicyPeriod = ""
 		p.PolicyMaxWithdrawAmount = decimal.Zero
 		p.PolicyStartTime = time.Time{}
