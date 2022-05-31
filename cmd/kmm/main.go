@@ -3,14 +3,15 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/bruth/kmm"
 	"github.com/bruth/rita"
@@ -18,11 +19,386 @@ import (
 	"github.com/bruth/rita/types"
 	"github.com/nats-io/jsm.go/natscontext"
 	"github.com/nats-io/nats.go"
+	"github.com/urfave/cli/v2"
 )
 
+var (
+	// Initialize the type registry with the application/domain types.
+	tr, _ = types.NewRegistry(kmm.Types)
+
+	app = &cli.App{
+		Name:  "kmm",
+		Usage: "Kids money manager.",
+		Commands: []*cli.Command{
+			serve,
+			deposit,
+			withdraw,
+			setBudget,
+			removeBudget,
+			currentBalance,
+			lastBudgetPeriod,
+			ledger,
+		},
+	}
+
+	natsFlags = []cli.Flag{
+		&cli.StringFlag{
+			Name:    "nats.url",
+			Value:   "",
+			Usage:   "NATS server URL(s).",
+			EnvVars: []string{"NATS_URL"},
+		},
+		&cli.StringFlag{
+			Name:    "nats.creds",
+			Value:   "",
+			Usage:   "NATS credentials file.",
+			EnvVars: []string{"NATS_CREDS"},
+		},
+		&cli.StringFlag{
+			Name:    "nats.context",
+			Value:   natscontext.SelectedContext(),
+			Usage:   "NATS context name.",
+			EnvVars: []string{"NATS_CONTEXT"},
+		},
+	}
+
+	serve = &cli.Command{
+		Name:  "serve",
+		Usage: "Run the server.",
+		Flags: append([]cli.Flag{
+			&cli.BoolFlag{
+				Name:    "nats.embed",
+				Value:   false,
+				Usage:   "Run NATS as an embedded server for testing.",
+				EnvVars: []string{"NATS_EMBED"},
+			},
+			&cli.StringFlag{
+				Name:    "http.addr",
+				Value:   "127.0.0.1:8080",
+				Usage:   "HTTP bind address.",
+				EnvVars: []string{"HTTP_ADDR"},
+			},
+		}, natsFlags...),
+		Action: func(c *cli.Context) error {
+			return runServer(c)
+		},
+	}
+
+	deposit = &cli.Command{
+		Name:      "deposit",
+		Usage:     "Deposit money into an account.",
+		Flags:     natsFlags,
+		ArgsUsage: "<account> <amount> [<description>]",
+		Action: func(c *cli.Context) error {
+			n := c.NArg()
+			if n < 2 {
+				return fmt.Errorf("account and amount are required")
+			} else if n > 3 {
+				return fmt.Errorf("at most three arguments are supported")
+			}
+
+			account := c.Args().Get(0)
+			amount := c.Args().Get(1)
+			description := c.Args().Get(2)
+
+			nc, err := connectNats(c)
+			if err != nil {
+				return err
+			}
+
+			subject := fmt.Sprintf("kmm.commands.%s.deposit-funds", account)
+			data, _ := json.Marshal(map[string]string{
+				"Amount":      amount,
+				"Description": description,
+			})
+
+			rep, err := nc.Request(subject, data, time.Second)
+			if err != nil {
+				return err
+			}
+			if len(rep.Data) > 0 {
+				fmt.Println(string(rep.Data))
+			}
+			return nil
+		},
+	}
+
+	withdraw = &cli.Command{
+		Name:      "withdraw",
+		Usage:     "Withdraw money from an account.",
+		Flags:     natsFlags,
+		ArgsUsage: "<account> <amount> [<description>]",
+		Action: func(c *cli.Context) error {
+			n := c.NArg()
+			if n < 2 {
+				return fmt.Errorf("account and amount are required")
+			} else if n > 3 {
+				return fmt.Errorf("at most three arguments are supported")
+			}
+
+			account := c.Args().Get(0)
+			amount := c.Args().Get(1)
+			description := c.Args().Get(2)
+
+			nc, err := connectNats(c)
+			if err != nil {
+				return err
+			}
+
+			subject := fmt.Sprintf("kmm.commands.%s.withdraw-funds", account)
+			data, _ := json.Marshal(map[string]string{
+				"Amount":      amount,
+				"Description": description,
+			})
+
+			rep, err := nc.Request(subject, data, time.Second)
+			if err != nil {
+				return err
+			}
+			if len(rep.Data) > 0 {
+				fmt.Println(string(rep.Data))
+			}
+			return nil
+		},
+	}
+
+	setBudget = &cli.Command{
+		Name:      "set-budget",
+		Usage:     "Set a budget on an account.",
+		Flags:     natsFlags,
+		ArgsUsage: "<account> <amount> <period>",
+		Action: func(c *cli.Context) error {
+			n := c.NArg()
+			if n != 3 {
+				return fmt.Errorf("account, amount, and period are required")
+			}
+
+			account := c.Args().Get(0)
+			amount := c.Args().Get(1)
+			period := c.Args().Get(2)
+
+			nc, err := connectNats(c)
+			if err != nil {
+				return err
+			}
+
+			subject := fmt.Sprintf("kmm.commands.%s.set-budget", account)
+			data, _ := json.Marshal(map[string]string{
+				"MaxAmount": amount,
+				"Period":    period,
+			})
+
+			rep, err := nc.Request(subject, data, time.Second)
+			if err != nil {
+				return err
+			}
+			if len(rep.Data) > 0 {
+				fmt.Println(string(rep.Data))
+			}
+			return nil
+		},
+	}
+
+	removeBudget = &cli.Command{
+		Name:      "remove-budget",
+		Usage:     "Removes a budget from an account.",
+		Flags:     natsFlags,
+		ArgsUsage: "<account>",
+		Action: func(c *cli.Context) error {
+			n := c.NArg()
+			if n != 1 {
+				return fmt.Errorf("account required")
+			}
+
+			account := c.Args().Get(0)
+
+			nc, err := connectNats(c)
+			if err != nil {
+				return err
+			}
+
+			subject := fmt.Sprintf("kmm.commands.%s.remove-budget", account)
+			rep, err := nc.Request(subject, []byte{}, time.Second)
+			if err != nil {
+				return err
+			}
+			if len(rep.Data) > 0 {
+				fmt.Println(string(rep.Data))
+			}
+			return nil
+		},
+	}
+
+	currentBalance = &cli.Command{
+		Name:      "balance",
+		Usage:     "Gets the current balance for an account.",
+		Flags:     natsFlags,
+		ArgsUsage: "<account>",
+		Action: func(c *cli.Context) error {
+			n := c.NArg()
+			if n != 1 {
+				return fmt.Errorf("account required")
+			}
+
+			account := c.Args().Get(0)
+
+			nc, err := connectNats(c)
+			if err != nil {
+				return err
+			}
+
+			subject := fmt.Sprintf("kmm.queries.%s.current-funds", account)
+			rep, err := nc.Request(subject, []byte{}, time.Second)
+			if err != nil {
+				return err
+			}
+			v, err := tr.UnmarshalType(rep.Data, "current-funds")
+			if err != nil {
+				return err
+			}
+			funds, _ := v.(*kmm.CurrentFunds)
+			fmt.Println(funds.Amount)
+			return nil
+		},
+	}
+
+	ledger = &cli.Command{
+		Name:      "ledger",
+		Usage:     "Subscribes to the account ledger.",
+		Flags:     natsFlags,
+		ArgsUsage: "<account>",
+		Action: func(c *cli.Context) error {
+			n := c.NArg()
+			if n != 1 {
+				return fmt.Errorf("account required")
+			}
+
+			account := c.Args().Get(0)
+
+			nc, err := connectNats(c)
+			if err != nil {
+				return err
+			}
+
+			rt, _ := rita.New(nc, rita.TypeRegistry(tr))
+
+			subject := fmt.Sprintf("kmm.streams.%s.ledger", account)
+			sub, err := nc.SubscribeSync(subject)
+			if err != nil {
+				return err
+			}
+			defer sub.Unsubscribe()
+
+			for {
+				msg, err := sub.NextMsg(time.Minute)
+				switch err {
+				case nats.ErrTimeout:
+					continue
+				case nats.ErrConnectionClosed:
+					return nil
+				case nats.ErrBadSubscription:
+					return nil
+				}
+
+				event, err := rt.UnpackEvent(msg)
+				if err != nil {
+					log.Print(msg.Header)
+					log.Print(err)
+					continue
+				}
+
+				switch e := event.Data.(type) {
+				case *kmm.FundsDeposited:
+					if e.Description == "" {
+						fmt.Printf("+%s | %s\n", e.Amount, e.Time.Format(time.ANSIC))
+					} else {
+						fmt.Printf("+%s | %s | %s\n", e.Amount, e.Time.Format(time.ANSIC), e.Description)
+					}
+				case *kmm.FundsWithdrawn:
+					if e.Description == "" {
+						fmt.Printf("-%s | %s\n", e.Amount, e.Time.Format(time.ANSIC))
+					} else {
+						fmt.Printf("-%s | %s | %s\n", e.Amount, e.Time.Format(time.ANSIC), e.Description)
+					}
+				}
+			}
+		},
+	}
+
+	lastBudgetPeriod = &cli.Command{
+		Name:      "last-budget-period",
+		Usage:     "Gets the summary for the last active budget period.",
+		Flags:     natsFlags,
+		ArgsUsage: "<account>",
+		Action: func(c *cli.Context) error {
+			n := c.NArg()
+			if n != 1 {
+				return fmt.Errorf("account required")
+			}
+
+			account := c.Args().Get(0)
+
+			nc, err := connectNats(c)
+			if err != nil {
+				return err
+			}
+
+			subject := fmt.Sprintf("kmm.queries.%s.last-budget-period", account)
+			rep, err := nc.Request(subject, []byte{}, time.Second)
+			if err != nil {
+				return err
+			}
+			v, err := tr.UnmarshalType(rep.Data, "budget-period")
+			if err != nil {
+				return err
+			}
+			s, _ := v.(*kmm.BudgetPeriod)
+
+			if s.PolicyMaxWithdrawAmount.IsZero() {
+				fmt.Println("no budget set")
+				return nil
+			}
+
+			fmt.Printf(`period start: %s
+period end: %s
+withdrawals: %d
+total withdrawn: %s
+`, s.PeriodStartTime.Format(time.ANSIC), s.NextPeriodStartTime.Format(time.ANSIC), s.WithdrawalsInPeriod, s.FundsWithdrawnInPeriod)
+			return nil
+		},
+	}
+)
+
+func connectNats(c *cli.Context) (*nats.Conn, error) {
+	natsUrl := c.String("nats.url")
+	natsCreds := c.String("nats.creds")
+	natsContext := c.String("nats.context")
+
+	// Setup NATS connection depending on the values available.
+	if natsCreds == "" {
+		// Hack to get the get the creds file content as a Fly.io secret..
+		var err error
+		natsCreds, err = decodeUserCredsToFile(os.Getenv("NATS_CREDS_B64"))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var copts []nats.Option
+	if natsCreds != "" {
+		copts = append(copts, nats.UserCredentials(natsCreds))
+	}
+
+	if natsContext != "" {
+		return natscontext.Connect(natsContext, copts...)
+	}
+	return nats.Connect(natsUrl, copts...)
+}
+
 func main() {
-	if err := run(); err != nil {
-		log.Fatal(err)
+	if err := app.Run(os.Args); err != nil {
+		log.SetFlags(0)
+		log.Print(err)
 	}
 }
 
@@ -42,22 +418,9 @@ func decodeUserCredsToFile(s string) (string, error) {
 	return f.Name(), f.Close()
 }
 
-func run() error {
-	var (
-		natsUrl     string
-		natsCreds   string
-		natsContext string
-		natsEmbed   bool
-		httpAddr    string
-	)
-
-	flag.StringVar(&natsUrl, "nats.url", "", "NATS connection URL.")
-	flag.StringVar(&natsCreds, "nats.creds", "", "NATS user credentials file.")
-	flag.StringVar(&natsContext, "nats.context", "", "NATS context.")
-	flag.BoolVar(&natsEmbed, "nats.embed", false, "NATS embedded mode.")
-	flag.StringVar(&httpAddr, "http.addr", "0.0.0.0:8080", "HTTP address.")
-
-	flag.Parse()
+func runServer(c *cli.Context) error {
+	natsEmbed := c.Bool("nats.embed")
+	httpAddr := c.String("http.addr")
 
 	var (
 		nc  *nats.Conn
@@ -65,48 +428,18 @@ func run() error {
 	)
 
 	if natsEmbed {
-		ns := testutil.NewNatsServer()
+		ns := testutil.NewNatsServer(4837)
 		defer ns.Shutdown()
-
 		nc, err = nats.Connect(ns.ClientURL())
 	} else {
-		// Setup NATS connection depending on the values available.
-		if natsUrl == "" {
-			natsUrl = os.Getenv("NATS_URL")
-		}
-		if natsCreds == "" {
-			// Hack to get the get the creds file content as a Fly.io secret..
-			var err error
-			natsCreds, err = decodeUserCredsToFile(os.Getenv("NATS_CREDS_B64"))
-			if err != nil {
-				return err
-			}
-		}
-
-		var copts []nats.Option
-		if natsCreds != "" {
-			copts = append(copts, nats.UserCredentials(natsCreds))
-		}
-
-		if natsContext != "" {
-			nc, err = natscontext.Connect(natsContext, copts...)
-		} else {
-			nc, err = nats.Connect(natsUrl, copts...)
-		}
+		nc, err = connectNats(c)
 	}
-
 	if err != nil {
 		return err
 	}
 	defer nc.Drain() //nolint
 
 	js, err := nc.JetStream()
-	if err != nil {
-		return err
-	}
-
-	// Initialize the type registry with the application/domain types.
-	tr, err := types.NewRegistry(kmm.Types)
 	if err != nil {
 		return err
 	}
@@ -127,13 +460,13 @@ func run() error {
 		return err
 	}
 
-	// Emulate taking a private events and re-publishing them via a public subject.
+	// Emulate taking private events and re-publishing them to a public subject.
 	// Typically a new type/payload can be used with more enrichment.
 	sub, err := js.QueueSubscribe("kmm.events.accounts.*", "live-ledger", func(msg *nats.Msg) {
 		idx := strings.LastIndexByte(msg.Subject, '.')
 		account := msg.Subject[idx+1:]
 
-		event, err := es.UnpackEvent(msg)
+		event, err := rt.UnpackEvent(msg)
 		if err != nil {
 			log.Print(err)
 			return
@@ -147,7 +480,10 @@ func run() error {
 		}
 
 		subject := fmt.Sprintf("kmm.streams.%s.ledger", account)
-		err = nc.Publish(subject, msg.Data)
+		nmsg := nats.NewMsg(subject)
+		nmsg.Header = msg.Header
+		nmsg.Data = msg.Data
+		err = nc.PublishMsg(nmsg)
 		if err != nil {
 			log.Print(err)
 			return
@@ -157,7 +493,7 @@ func run() error {
 		if err != nil {
 			log.Print(err)
 		}
-	}, nats.BindStream("kmm"))
+	}, nats.BindStream("kmm"), nats.DeliverAll())
 	if err != nil {
 		return err
 	}
@@ -167,6 +503,9 @@ func run() error {
 		// Unmarshal the command based on the type.
 		cmd, err := tr.UnmarshalType(msg.Data, operation)
 		if err != nil {
+			if err == types.ErrTypeNotRegistered {
+				return nil, fmt.Errorf("unknown command: %s", operation)
+			}
 			return nil, err
 		}
 
@@ -215,8 +554,8 @@ func run() error {
 		return &s, nil
 	}
 
-	handlePeriodSummaryQuery := func(ctx context.Context, msg *nats.Msg, account string) (any, error) {
-		var s kmm.PeriodSummary
+	handleBudgetSummaryQuery := func(ctx context.Context, msg *nats.Msg, account string) (any, error) {
+		var s kmm.BudgetPeriod
 
 		subject := fmt.Sprintf("kmm.events.accounts.%s", account)
 		_, err := es.Evolve(ctx, subject, &s)
@@ -288,8 +627,8 @@ func run() error {
 		case "current-funds":
 			result, err = handleCurrentFundsQuery(ctx, msg, account)
 
-		case "period-summary":
-			result, err = handlePeriodSummaryQuery(ctx, msg, account)
+		case "last-budget-period":
+			result, err = handleBudgetSummaryQuery(ctx, msg, account)
 
 		default:
 			err = errors.New("unknown query")
